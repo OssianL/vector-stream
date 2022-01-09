@@ -55,8 +55,10 @@ func main() {
 	funDefBytes := server.Init()
 	funDefBytecode := NewBytecodeFromBytes(funDefBytes)
 	fmt.Println(funDefBytecode)
-	if err := client.Update(funDefBytecode); err != nil {
-		fmt.Println("error while init: " + err.Error())
+	client.Update(funDefBytecode)
+	fmt.Println("init done")
+	if client.Err != nil {
+		fmt.Println("error while init: " + client.Err.Error())
 		return
 	}
 
@@ -86,12 +88,14 @@ func main() {
 
 		bytes := server.Update()
 		bytecode := NewBytecodeFromBytes(bytes)
-		if err := client.Update(bytecode); err != nil {
-			fmt.Println("error while client.Update(): ", err.Error())
+		client.Update(bytecode)
+		if client.Err != nil {
+			fmt.Println("error while client.Update(): ", client.Err.Error())
 			break
 		}
-		if err := client.Render(); err != nil {
-			fmt.Println("error while client.Render(): ", err.Error())
+		client.Render()
+		if client.Err != nil {
+			fmt.Println("error while client.Render(): ", client.Err.Error())
 			break
 		}
 

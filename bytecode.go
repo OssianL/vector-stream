@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"math"
 
 	"github.com/shibukawa/nanovgo"
@@ -59,9 +60,21 @@ var renderOpcodeName = [256]string{
 	"ropBeginPath", "ropSetFillColor", "ropFill", "ropRectangle", "uopFunCall",
 }
 
+type BytecodeError struct {
+	I      int
+	Opcode uint8
+	Err    error
+}
+
+func (be BytecodeError) Error() string {
+	return fmt.Sprintln("bytecode error i: ", be.I, " opcode: ", be.Opcode, " ", be.Err.Error())
+}
+
 type Bytecode struct {
-	bytes []byte
-	i     int
+	bytes      []byte
+	i          int
+	Err        error
+	lastOpcode uint8
 }
 
 func NewBytecode() *Bytecode {
@@ -84,13 +97,18 @@ func (b *Bytecode) pushUint8(value uint8) {
 	b.bytes = append(b.bytes, value)
 }
 
-func (c *Bytecode) popUint8() (uint8, error) {
-	if c.i >= len(c.bytes) {
-		return 0, errors.New("popUint8 out of range")
+func (b *Bytecode) popUint8() uint8 {
+	if b.i >= len(b.bytes) {
+		b.Err = &BytecodeError{
+			I:      b.i,
+			Opcode: b.lastOpcode,
+			Err:    errors.New("popUint8 out of range"),
+		}
+		return math.MaxUint8
 	}
-	var value uint8 = c.bytes[c.i]
-	c.i += 1
-	return value, nil
+	var value uint8 = b.bytes[b.i]
+	b.i += 1
+	return value
 }
 
 func (s *Bytecode) pushUint16(value uint16) {
@@ -99,15 +117,26 @@ func (s *Bytecode) pushUint16(value uint16) {
 	s.bytes = append(s.bytes, low, high)
 }
 
-func (b *Bytecode) popUint16() (uint16, error) {
+func (b *Bytecode) popUint16() uint16 {
 	if (b.i + 1) >= len(b.bytes) {
-		return 0, errors.New("popUint16 out of range")
+		b.Err = &BytecodeError{
+			I:      b.i,
+			Opcode: b.lastOpcode,
+			Err:    errors.New("popUint16 out of range"),
+		}
+		return math.MaxUint16
 	}
 	low := b.bytes[b.i]
 	high := b.bytes[b.i+1]
 	value := (uint16(high) << 8) + uint16(low)
 	b.i += 2
-	return value, nil
+	return value
+}
+
+func (b *Bytecode) popOpcode() uint8 {
+	opcode := b.popUint8()
+	b.lastOpcode = opcode
+	return opcode
 }
 
 func (b *Bytecode) pushVec2(point Vec2) {
@@ -115,16 +144,8 @@ func (b *Bytecode) pushVec2(point Vec2) {
 	b.pushUint16(uint16(point.Y))
 }
 
-func (b *Bytecode) popVec2() (Vec2, error) {
-	x, err := b.popUint16()
-	if err != nil {
-		return Vec2{}, err
-	}
-	y, err := b.popUint16()
-	if err != nil {
-		return Vec2{}, err
-	}
-	return Vec2{X: float64(x), Y: float64(y)}, nil
+func (b *Bytecode) popVec2() Vec2 {
+	return Vec2{X: float64(b.popUint16()), Y: float64(b.popUint16())}
 }
 
 func (b *Bytecode) pushRect(value FixpointRect) {
@@ -134,24 +155,12 @@ func (b *Bytecode) pushRect(value FixpointRect) {
 	b.pushUint16(value.H)
 }
 
-func (b *Bytecode) popRect() (Rect, error) {
-	x, err := b.popUint16()
-	if err != nil {
-		return Rect{}, err
-	}
-	y, err := b.popUint16()
-	if err != nil {
-		return Rect{}, err
-	}
-	w, err := b.popUint16()
-	if err != nil {
-		return Rect{}, err
-	}
-	h, err := b.popUint16()
-	if err != nil {
-		return Rect{}, err
-	}
-	return Rect{position: Vec2{X: float64(x), Y: float64(y)}, W: float64(w), H: float64(h)}, nil
+func (b *Bytecode) popRect() Rect {
+	x := b.popUint16()
+	y := b.popUint16()
+	w := b.popUint16()
+	h := b.popUint16()
+	return Rect{position: Vec2{X: float64(x), Y: float64(y)}, W: float64(w), H: float64(h)}
 }
 
 func (b *Bytecode) pushRgba(value nanovgo.Color) {
@@ -161,29 +170,17 @@ func (b *Bytecode) pushRgba(value nanovgo.Color) {
 	b.pushUint8(uint8(value.A * 255))
 }
 
-func (b *Bytecode) popRgba() (nanovgo.Color, error) {
+func (b *Bytecode) popRgba() nanovgo.Color {
 	color := nanovgo.Color{}
-	red, err := b.popUint8()
-	if err != nil {
-		return color, err
-	}
+	red := b.popUint8()
 	color.R = float32(red) / 255
-	green, err := b.popUint8()
-	if err != nil {
-		return color, err
-	}
+	green := b.popUint8()
 	color.G = float32(green) / 255
-	blue, err := b.popUint8()
-	if err != nil {
-		return color, err
-	}
+	blue := b.popUint8()
 	color.B = float32(blue) / 255
-	alpha, err := b.popUint8()
-	if err != nil {
-		return color, err
-	}
+	alpha := b.popUint8()
 	color.A = float32(alpha) / 255
-	return color, nil
+	return color
 }
 
 func (b *Bytecode) pushRotation(rotation float64) {
@@ -191,22 +188,16 @@ func (b *Bytecode) pushRotation(rotation float64) {
 	b.pushUint16(rotationUint)
 }
 
-func (b *Bytecode) popRotation() (float64, error) {
-	rotationUint, err := b.popUint16()
-	if err != nil {
-		return 0, err
-	}
-	return float64(rotationUint) / math.MaxUint16 * math.Pi * 2, nil
+func (b *Bytecode) popRotation() float64 {
+	rotationUint := b.popUint16()
+	return float64(rotationUint) / math.MaxUint16 * math.Pi * 2
 }
 
 func (b *Bytecode) pushScale(scale Vec2) {
 	b.pushVec2(scale.MultiplyFloat(uintScaleFactor))
 }
 
-func (b *Bytecode) popScale() (Vec2, error) {
-	scale, err := b.popVec2()
-	if err != nil {
-		return Vec2{}, err
-	}
-	return scale.DivideFloat(uintScaleFactor), nil
+func (b *Bytecode) popScale() Vec2 {
+	scale := b.popVec2()
+	return scale.DivideFloat(uintScaleFactor)
 }
