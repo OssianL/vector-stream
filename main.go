@@ -57,10 +57,6 @@ func main() {
 	fmt.Println(funDefBytecode)
 	client.Update(funDefBytecode)
 	fmt.Println("init done")
-	if client.Err != nil {
-		fmt.Println("error while init: " + client.Err.Error())
-		return
-	}
 
 	for !window.ShouldClose() {
 		time.Sleep(time.Millisecond * 5)
@@ -89,15 +85,7 @@ func main() {
 		bytes := server.Update()
 		bytecode := NewBytecodeFromBytes(bytes)
 		client.Update(bytecode)
-		if client.Err != nil {
-			fmt.Println("error while client.Update(): ", client.Err.Error())
-			break
-		}
 		client.Render()
-		if client.Err != nil {
-			fmt.Println("error while client.Render(): ", client.Err.Error())
-			break
-		}
 
 		ctx.EndFrame()
 

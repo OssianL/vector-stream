@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -213,14 +212,6 @@ func (n *Node) TransformPoints(points []Vec2) []Vec2 {
 	return points
 }
 
-type ClientError struct {
-	Err error
-}
-
-func (ce *ClientError) Error() string {
-	return ce.Err.Error()
-}
-
 type Client struct {
 	*Bytecode
 	updateOperations [256]func()
@@ -256,18 +247,16 @@ func NewClient(nvgCtx *nanovgo.Context) *Client {
 	return &client
 }
 
+func (c *Client) error(description string) {
+	log.Fatal(description)
+}
+
 func (c *Client) Update(bytecode *Bytecode) {
 	debugPrint2("update bytes: ", bytecode.bytes)
 	c.Bytecode = bytecode
-	if c.Err != nil {
-		return
-	}
 	for {
 		for c.i < len(c.bytes) {
 			c.updateStep()
-			if c.Err != nil {
-				return
-			}
 		}
 		if !c.popState() {
 			return
@@ -277,14 +266,8 @@ func (c *Client) Update(bytecode *Bytecode) {
 
 func (c *Client) updateStep() {
 	opcode := c.popOpcode()
-	if c.Err != nil {
-		return
-	}
 	if opcode > uopCodeCount {
-		c.Err = &ClientError{
-			Err: errors.New("invalid update opcode: " + fmt.Sprint(opcode)),
-		}
-		return
+		c.error("invalid update opcode: " + fmt.Sprint(opcode))
 	}
 	debugPrint("i: ", c.i-1, " opcode: ", updateOpcodeNames[opcode])
 	c.updateOperations[opcode]()
@@ -296,7 +279,7 @@ func (c *Client) Render() {
 }
 
 func (c *Client) renderNode(node *Node) {
-	if node == nil || c.Err != nil {
+	if node == nil {
 		return
 	}
 	node.UpdateLocalToGlobalMatrix()
@@ -313,12 +296,9 @@ func (c *Client) renderNode(node *Node) {
 
 func (c *Client) renderStep(node *Node) {
 	opcode := c.popOpcode()
-	if c.Err != nil {
-		return
-	}
 	debugPrint("i: ", c.i-1, " opcode: ", renderOpcodeName[opcode])
 	if opcode > ropCodeCount {
-		c.Err = &ClientError{Err: errors.New("invalid render opcode: " + fmt.Sprint(opcode))}
+		c.error("invalid render opcode: " + fmt.Sprint(opcode))
 	}
 	c.renderOperations[opcode](node)
 }
@@ -326,7 +306,7 @@ func (c *Client) renderStep(node *Node) {
 func (c *Client) pushState(bytecode *Bytecode) {
 	debugPrint("push state, c.Bytecode == nil: ", c.Bytecode == nil)
 	if bytecode == nil {
-		log.Fatal("pushState nil bytecode")
+		c.error("pushState nil bytecode")
 	}
 	if c.Bytecode != nil {
 		c.stack = append(c.stack, c.Bytecode)
@@ -351,17 +331,12 @@ func (c *Client) popState() bool {
 
 func (c *Client) popAndCompileMacro() *Bytecode {
 	macroNumber := c.popUint16()
-	if c.Err != nil {
-		return nil
-	}
 	macro, ok := c.macros[macroNumber]
 	if !ok {
-		c.Err = &ClientError{Err: errors.New("popAndCompileMacro: invalid macroNumber: " + fmt.Sprint(macroNumber))}
-		return nil
+		c.error("popAndCompileMacro: invalid macroNumber: " + fmt.Sprint(macroNumber))
 	}
 	if c.i+macro.totalVariablesSize > len(c.bytes) {
-		c.Err = &ClientError{Err: errors.New("popAndCompileMacro: macro variable block out of range")}
-		return nil
+		c.error("popAndCompileMacro: macro variable block out of range")
 	}
 	variables := c.bytes[c.i : c.i+macro.totalVariablesSize]
 	c.i += len(variables)
@@ -372,8 +347,7 @@ func (c *Client) popNode() *Node {
 	nodeNumber := c.popUint16()
 	node, ok := c.nodes[nodeNumber]
 	if !ok {
-		c.Err = &ClientError{Err: errors.New("popNode: invalid nodeNumber")}
-		return nil
+		c.error("popNode: invalid nodeNumber")
 	}
 	return node
 }
@@ -389,8 +363,7 @@ func (c *Client) popNode() *Node {
 
 func (c *Client) macroDefStart() {
 	if c.wipMacro != nil {
-		c.Err = &ClientError{Err: errors.New("macroDefStart: wip function already in progress")}
-		return
+		c.error("macroDefStart: wip function already in progress")
 	}
 	functionNumber := c.popUint16()
 	newWipMacro := NewMacro()
@@ -401,8 +374,7 @@ func (c *Client) macroDefStart() {
 
 func (c *Client) macroDefEnd() {
 	if c.wipMacro == nil {
-		c.Err = &ClientError{Err: errors.New("macroDefEnd: nil wip function")}
-		return
+		c.error("macroDefEnd: nil wip function")
 	}
 	c.macros[c.wipMacroNumber] = c.wipMacro
 	c.wipMacro = nil
@@ -410,8 +382,7 @@ func (c *Client) macroDefEnd() {
 
 func (c *Client) macroDefOperation() {
 	if c.wipMacro == nil {
-		c.Err = &ClientError{Err: errors.New("macroDefOperation: nil wipFunction")}
-		return
+		c.error("macroDefOperation: nil wip function")
 	}
 	opcode := c.popUint8()
 	c.wipMacro.bytecode.pushUint8(opcode)
@@ -419,8 +390,7 @@ func (c *Client) macroDefOperation() {
 
 func (c *Client) macroDefVar8() {
 	if c.wipMacro == nil {
-		c.Err = &ClientError{Err: errors.New("macroDefVar8: nil wipFunction")}
-		return
+		c.error("macroDefVar8: nil wip function")
 	}
 	c.wipMacro.variableSizes = append(c.wipMacro.variableSizes, 1)
 	c.wipMacro.variableStartIndexes = append(c.wipMacro.variableStartIndexes, c.wipMacro.totalVariablesSize)
@@ -429,8 +399,7 @@ func (c *Client) macroDefVar8() {
 
 func (c *Client) macroDefVar16() {
 	if c.wipMacro == nil {
-		c.Err = &ClientError{Err: errors.New("macroDefVar16: nil wipFunction")}
-		return
+		c.error("macroDefVar16: nil wip function")
 	}
 	c.wipMacro.variableSizes = append(c.wipMacro.variableSizes, 2)
 	c.wipMacro.variableStartIndexes = append(c.wipMacro.variableStartIndexes, c.wipMacro.totalVariablesSize)
@@ -439,8 +408,7 @@ func (c *Client) macroDefVar16() {
 
 func (c *Client) macroDefUseVar8() {
 	if c.wipMacro == nil {
-		c.Err = &ClientError{Err: errors.New("macroDefUseVar8: nil wipFunction")}
-		return
+		c.error("macroDefUseVar8: nil wip function")
 	}
 	variableNumber := c.popUint16()
 	variableReference := FunctionVariableReference{
@@ -454,8 +422,7 @@ func (c *Client) macroDefUseVar8() {
 
 func (c *Client) macroDefUseVar16() {
 	if c.wipMacro == nil {
-		c.Err = &ClientError{Err: errors.New("macroDefUseVar16: nil wipFunction")}
-		return
+		c.error("macroDefUseVar16: nil wip function")
 	}
 	variableNumber := c.popUint16()
 	variableReference := FunctionVariableReference{
@@ -469,8 +436,7 @@ func (c *Client) macroDefUseVar16() {
 
 func (c *Client) macroDefUseConst8() {
 	if c.wipMacro == nil {
-		c.Err = &ClientError{Err: errors.New("macroDefUseConst8: nil wipFunction")}
-		return
+		c.error("macroDefUseConst8: nil wip function")
 	}
 	const8 := c.popUint8()
 	c.wipMacro.bytecode.pushUint8(const8)
@@ -478,8 +444,7 @@ func (c *Client) macroDefUseConst8() {
 
 func (c *Client) macroDefUseConst16() {
 	if c.wipMacro == nil {
-		c.Err = &ClientError{Err: errors.New("macroDefUseConst16: nil wipFunction")}
-		return
+		c.error("macroDefUseConst16: nil wip function")
 	}
 	const16 := c.popUint16()
 	c.wipMacro.bytecode.pushUint16(const16)
@@ -489,8 +454,7 @@ func (c *Client) nodeCreate() {
 	nodeNumber := c.popUint16()
 	newNode := NewNode()
 	if _, ok := c.nodes[nodeNumber]; ok {
-		c.Err = &ClientError{Err: errors.New("nodeCreate: a node with nodeNumber already exists")}
-		return
+		c.error("nodeCreate: a node with nodeNumber already exists")
 	}
 	c.nodes[nodeNumber] = newNode
 	c.root.AddChild(newNode)
@@ -513,8 +477,7 @@ func (c *Client) nodeSetParent() {
 	parentNodeNumber := c.popUint16()
 	parentNode, ok := c.nodes[parentNodeNumber]
 	if !ok {
-		c.Err = &ClientError{Err: errors.New("nodeSetParent: invalid parentNodeNumber")}
-		return
+		c.error("nodeSetParent: invalid parentNodeNumber")
 	}
 	parentNode.AddChild(node)
 }

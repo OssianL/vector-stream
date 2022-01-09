@@ -1,8 +1,7 @@
 package main
 
 import (
-	"errors"
-	"fmt"
+	"log"
 	"math"
 
 	"github.com/shibukawa/nanovgo"
@@ -60,21 +59,14 @@ var renderOpcodeName = [256]string{
 	"ropBeginPath", "ropSetFillColor", "ropFill", "ropRectangle", "uopFunCall",
 }
 
-type BytecodeError struct {
-	I      int
-	Opcode uint8
-	Err    error
-}
-
-func (be BytecodeError) Error() string {
-	return fmt.Sprintln("bytecode error i: ", be.I, " opcode: ", be.Opcode, " ", be.Err.Error())
-}
-
 type Bytecode struct {
 	bytes      []byte
 	i          int
-	Err        error
 	lastOpcode uint8
+}
+
+func (b *Bytecode) error(description string) {
+	log.Fatal("i: ", b.i, " lastOpcode: ", b.lastOpcode, " error: ", description)
 }
 
 func NewBytecode() *Bytecode {
@@ -99,12 +91,7 @@ func (b *Bytecode) pushUint8(value uint8) {
 
 func (b *Bytecode) popUint8() uint8 {
 	if b.i >= len(b.bytes) {
-		b.Err = &BytecodeError{
-			I:      b.i,
-			Opcode: b.lastOpcode,
-			Err:    errors.New("popUint8 out of range"),
-		}
-		return math.MaxUint8
+		b.error("popUint8 out of range")
 	}
 	var value uint8 = b.bytes[b.i]
 	b.i += 1
@@ -119,12 +106,7 @@ func (s *Bytecode) pushUint16(value uint16) {
 
 func (b *Bytecode) popUint16() uint16 {
 	if (b.i + 1) >= len(b.bytes) {
-		b.Err = &BytecodeError{
-			I:      b.i,
-			Opcode: b.lastOpcode,
-			Err:    errors.New("popUint16 out of range"),
-		}
-		return math.MaxUint16
+		b.error("popUint16 out of range")
 	}
 	low := b.bytes[b.i]
 	high := b.bytes[b.i+1]
