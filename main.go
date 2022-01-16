@@ -87,6 +87,15 @@ func main() {
 		client.Update(bytecode)
 		client.Render()
 
+		// ctx.BeginPath()
+		// ctx.MoveTo(176.02533164390738, 179.57979919208287)
+		// ctx.LineTo(185, 180)
+		// ctx.LineTo(185, 190)
+		// ctx.LineTo(176, 190)
+		// ctx.ClosePath()
+		// ctx.SetFillColor(nanovgo.RGB(255, 255, 255))
+		// ctx.Fill()
+
 		ctx.EndFrame()
 
 		gl.Enable(gl.DEPTH_TEST)

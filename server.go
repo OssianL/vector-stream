@@ -12,10 +12,10 @@ var colorRed = nanovgo.Color{R: 1, G: 0, B: 0, A: 1}
 var colorGreen = nanovgo.Color{R: 0, G: 1, B: 0, A: 1}
 var colorBlue = nanovgo.Color{R: 0, G: 0, B: 1, A: 1}
 
-var testMacro1 uint16
-var testMacro2 uint16
-var testNode1 uint16
-var testNode2 uint16
+var testMacro1 MacroNumber
+var testMacro2 MacroNumber
+var testNode1 NodeNumber
+var testNode2 NodeNumber
 
 type Server struct {
 	Bytecode
@@ -35,7 +35,7 @@ type Server struct {
 func NewServer() *Server {
 	var server Server = Server{
 		Bytecode:       *NewBytecode(),
-		rect:           Rect{Vec2{0, 0}, 30, 30},
+		rect:           Rect{Vec2{0, 0}, Vec2{30, 30}},
 		rectDirectionX: 1,
 		rectDirectionY: 1,
 	}
@@ -45,10 +45,10 @@ func NewServer() *Server {
 func (s *Server) Init() []byte {
 	s.Bytecode = *NewBytecode()
 	s.startTime = time.Now()
-	testMacro1 = s.defineTestMacro(20, 30)
-	testMacro2 = s.defineTestMacro(10, 40)
-	testNode1 = s.createTestNode(testMacro1, s.rect.W, s.rect.H)
-	testNode2 = s.createTestNode(testMacro2, 20, 40)
+	testMacro1 = s.defineTestMacro(colorRed)
+	testMacro2 = s.defineTestMacro(colorGreen)
+	testNode1 = s.createTestNode(testMacro1, s.rect.size)
+	testNode2 = s.createTestNode(testMacro2, Vec2{20, 40})
 	s.nodeSetParent(testNode2, testNode1)
 	s.nodeSetPosition(testNode2, Vec2{40, 40})
 	return s.bytes
@@ -93,25 +93,29 @@ func (s *Server) Update() []byte {
 	s.nodeSetRotation(testNode1, secondsFromStart)
 	s.nodeSetScale(testNode1, Vec2{sinTime, cosTime})
 
-	xOffset := sinTime * 70
-	s.nodeSetPosition(testNode2, Vec2{xOffset, 0})
+	// xOffset := sinTime * 70
+	s.nodeSetPosition(testNode2, Vec2{20, 20})
+	// s.nodeSetPosition(testNode2, Vec2{xOffset, 0})
 
 	return s.bytes
 }
 
-func (s *Server) defineTestMacro(x uint16, y uint16) uint16 {
+func (s *Server) defineTestMacro(color nanovgo.Color) MacroNumber {
 	macroNumber := s.macroStart()
-	width := s.macroVar16()
-	height := s.macroVar16()
+	// sizeVar := s.macroVar(sizeOfVec2)
 
 	s.macroOperation(ropBeginPath)
-	s.macroOperation(ropRectangle)
-	s.macroUseConst16(x) // x
-	s.macroUseConst16(y) // y
-	s.macroUseVar16(width)
-	s.macroUseVar16(height)
+	s.macroOperation(ropMoveTo)
+	s.macroUseConstVec2(Vec2{0, 0})
+	s.macroOperation(ropLineTo)
+	s.macroUseConstVec2(Vec2{100, 0})
+	s.macroOperation(ropLineTo)
+	s.macroUseConstVec2(Vec2{100, 100})
+	s.macroOperation(ropLineTo)
+	s.macroUseConstVec2(Vec2{0, 100})
+	s.macroOperation(ropClosePath)
 	s.macroOperation(ropSetFillColor)
-	s.macroUseConstColor(colorRed)
+	s.macroUseConstColor(color)
 	s.macroOperation(ropFill)
 
 	s.macroEnd()
@@ -119,19 +123,19 @@ func (s *Server) defineTestMacro(x uint16, y uint16) uint16 {
 	return macroNumber
 }
 
-func (s *Server) createTestNode(macroNumber uint16, width float64, height float64) uint16 {
+func (s *Server) createTestNode(macroNumber MacroNumber, size Vec2) NodeNumber {
 	nodeNumber := s.nodeCreate()
 	s.nodeSetContent(nodeNumber, macroNumber)
-	s.pushUint16(uint16(width))
-	s.pushUint16(uint16(height))
+	// s.pushUint16(uint16(width))
+	// s.pushUint16(uint16(height))
 	return nodeNumber
 }
 
 func (s *Server) macroUseConstColor(color nanovgo.Color) {
-	s.macroUseConst8(uint8(color.R * 255))
-	s.macroUseConst8(uint8(color.R * 255))
-	s.macroUseConst8(uint8(color.R * 255))
-	s.macroUseConst8(uint8(color.R * 255))
+	s.macroUseConstUint8(uint8(color.R * 255))
+	s.macroUseConstUint8(uint8(color.G * 255))
+	s.macroUseConstUint8(uint8(color.B * 255))
+	s.macroUseConstUint8(uint8(color.A * 255))
 }
 
 //-----------------UPDATE OPERATIONS----------------------------
@@ -141,93 +145,90 @@ func (s *Server) macroUseConstColor(color nanovgo.Color) {
 //-----------------UPDATE OPERATIONS----------------------------
 //-----------------UPDATE OPERATIONS----------------------------
 
-func (s *Server) macroStart() uint16 {
-	s.pushUint8(uopMacroStart)
-	macroNumber := s.macroCount
-	s.pushUint16(macroNumber)
+func (s *Server) macroStart() MacroNumber {
+	s.pushOpcode(uopMacroStart)
+	macroNumber := MacroNumber(s.macroCount)
+	s.pushMacroNumber(macroNumber)
 	s.macroCount++
 	return macroNumber
 }
 
 func (s *Server) macroEnd() {
-	s.pushUint8(uopMacroEnd)
+	s.pushOpcode(uopMacroEnd)
 	s.macroVariableCount = 0
 }
 
 func (s *Server) macroOperation(opcode uint8) {
-	s.pushUint8(uopMacroOperation)
+	s.pushOpcode(uopMacroOperation)
 	s.pushUint8(opcode)
 }
 
-func (s *Server) macroVar8() uint16 {
-	s.pushUint8(uopMacroVar8)
+func (s *Server) macroVar(varSize int) uint16 {
+	s.pushOpcode(uopMacroVar)
+	s.pushSize(varSize)
 	variableNumber := s.macroVariableCount
 	s.macroVariableCount++
 	return variableNumber
 }
 
-func (s *Server) macroVar16() uint16 {
-	s.pushUint8(uopMacroVar16)
-	variableNumber := s.macroVariableCount
-	s.macroVariableCount++
-	return variableNumber
-}
-
-func (s *Server) macroUseVar8(variableNumber uint16) {
-	s.pushUint8(uopMacroUseVar8)
+func (s *Server) macroUseVar(variableNumber uint16) {
+	s.pushOpcode(uopMacroUseVar)
 	s.pushUint16(variableNumber)
 }
 
-func (s *Server) macroUseVar16(variableNumber uint16) {
-	s.pushUint8(uopMacroUseVar16)
-	s.pushUint16(variableNumber)
-}
-
-func (s *Server) macroUseConst8(const8 uint8) {
-	s.pushUint8(uopMacroUseConst8)
+func (s *Server) macroUseConstUint8(const8 uint8) {
+	s.pushOpcode(uopMacroUseConst)
+	s.pushSize(1)
 	s.pushUint8(const8)
 }
 
-func (s *Server) macroUseConst16(const16 uint16) {
-	s.pushUint8(uopMacroUseConst16)
+func (s *Server) macroUseConstUint16(const16 uint16) {
+	s.pushOpcode(uopMacroUseConst)
+	s.pushSize(2)
 	s.pushUint16(const16)
 }
 
-func (s *Server) nodeCreate() uint16 {
-	s.pushUint8(uopNodeCreate)
-	nodeNumber := s.nodeCount
-	s.pushUint16(nodeNumber)
+func (s *Server) macroUseConstVec2(constVec2 Vec2) {
+	s.pushOpcode(uopMacroUseConst)
+	s.pushSize(sizeOfVec2)
+	s.pushVec2(constVec2)
+}
+
+func (s *Server) nodeCreate() NodeNumber {
+	s.pushOpcode(uopNodeCreate)
+	nodeNumber := NodeNumber(s.nodeCount)
+	s.pushNodeNumber(nodeNumber)
 	s.nodeCount++
 	return nodeNumber
 }
 
-func (s *Server) nodeSetContent(nodeNumber uint16, macroNumber uint16) {
-	s.pushUint8(uopNodeSetContent)
-	s.pushUint16(nodeNumber)
-	s.pushUint16(macroNumber)
+func (s *Server) nodeSetContent(nodeNumber NodeNumber, macroNumber MacroNumber) {
+	s.pushOpcode(uopNodeSetContent)
+	s.pushNodeNumber(nodeNumber)
+	s.pushMacroNumber(macroNumber)
 }
 
-func (s *Server) nodeSetParent(nodeNumber uint16, parentNumber uint16) {
-	s.pushUint8(uopNodeSetParent)
-	s.pushUint16(nodeNumber)
-	s.pushUint16(parentNumber)
+func (s *Server) nodeSetParent(nodeNumber NodeNumber, parentNumber NodeNumber) {
+	s.pushOpcode(uopNodeSetParent)
+	s.pushNodeNumber(nodeNumber)
+	s.pushNodeNumber(parentNumber)
 }
 
-func (s *Server) nodeSetPosition(nodeNumber uint16, position Vec2) {
-	s.pushUint8(uopNodeSetPosition)
-	s.pushUint16(nodeNumber)
+func (s *Server) nodeSetPosition(nodeNumber NodeNumber, position Vec2) {
+	s.pushOpcode(uopNodeSetPosition)
+	s.pushNodeNumber(nodeNumber)
 	s.pushVec2(position)
 }
 
-func (s *Server) nodeSetRotation(nodeNumber uint16, rotation float64) {
-	s.pushUint8(uopNodeSetRotation)
-	s.pushUint16(nodeNumber)
+func (s *Server) nodeSetRotation(nodeNumber NodeNumber, rotation float64) {
+	s.pushOpcode(uopNodeSetRotation)
+	s.pushNodeNumber(nodeNumber)
 	s.pushRotation(rotation)
 }
 
-func (s *Server) nodeSetScale(nodeNumber uint16, scale Vec2) {
-	s.pushUint8(uopNodeSetScale)
-	s.pushUint16(nodeNumber)
+func (s *Server) nodeSetScale(nodeNumber NodeNumber, scale Vec2) {
+	s.pushOpcode(uopNodeSetScale)
+	s.pushNodeNumber(nodeNumber)
 	s.pushScale(scale)
 }
 
@@ -239,24 +240,19 @@ func (s *Server) nodeSetScale(nodeNumber uint16, scale Vec2) {
 //-------------------------RENDER OPERATIONS---------------------------
 
 func (s *Server) beginPath() {
-	s.pushUint8(ropBeginPath)
+	s.pushOpcode(ropBeginPath)
 }
 
 func (s *Server) setFillColor(color nanovgo.Color) {
-	s.pushUint8(ropSetFillColor)
+	s.pushOpcode(ropSetFillColor)
 	s.pushRgba(color)
 }
 
 func (s *Server) fill() {
-	s.pushUint8(ropFill)
-}
-
-func (s *Server) rectangle(rect FixpointRect) {
-	s.pushUint8(ropRectangle)
-	s.pushRect(rect)
+	s.pushOpcode(ropFill)
 }
 
 func (s *Server) macroCall(macroNumber uint16) {
-	s.pushUint8(ropMacroCall)
+	s.pushOpcode(ropMacroCall)
 	s.pushUint16(macroNumber)
 }

@@ -10,13 +10,13 @@ import (
 
 func debugPrint(i ...interface{}) {
 	if true {
-		fmt.Println(i)
+		fmt.Println(i...)
 	}
 }
 
 func debugPrint2(i ...interface{}) {
 	if true {
-		fmt.Println(i)
+		fmt.Println(i...)
 	}
 }
 
@@ -55,46 +55,6 @@ func (f *Macro) Compile(variables []byte) *Bytecode {
 	return bytecode
 }
 
-type Vec2 struct {
-	X float64
-	Y float64
-	// W float64
-}
-
-func (v Vec2) MultiplyFloat(f float64) Vec2 {
-	return Vec2{
-		X: v.X * f,
-		Y: v.Y * f,
-	}
-}
-
-func (v Vec2) DivideFloat(f float64) Vec2 {
-	return Vec2{
-		X: v.X / f,
-		Y: v.Y / f,
-	}
-}
-
-// func (h HomoPoint) ToPoint() Point {
-// 	return Point{
-// 		X: h.X / h.W,
-// 		Y: h.Y / h.W,
-// 	}
-// }
-
-// type Point struct {
-// 	X float64
-// 	Y float64
-// }
-
-// func (p Point) ToHomoPoint() HomoPoint {
-// 	return HomoPoint{
-// 		X: float64(p.X),
-// 		Y: float64(p.Y),
-// 		W: 1.0,
-// 	}
-// }
-
 type Matrix33 struct {
 	m00 float64
 	m01 float64
@@ -116,8 +76,8 @@ func BuildTranslationMatrix(translation Vec2) Matrix33 {
 }
 
 func BuildRotationMatrix(rotation float64) Matrix33 {
-	cos := float64(math.Cos(float64(rotation)))
-	sin := float64(math.Sin(float64(rotation)))
+	cos := math.Cos(rotation)
+	sin := math.Sin(rotation)
 	return Matrix33{
 		cos, -sin, 0,
 		sin, cos, 0,
@@ -212,16 +172,22 @@ func (n *Node) TransformPoints(points []Vec2) []Vec2 {
 	return points
 }
 
+type Anchor struct {
+	node     *Node
+	position Vec2
+}
+
 type Client struct {
 	*Bytecode
 	updateOperations [256]func()
 	renderOperations [256]func(*Node)
 	nvgCtx           *nanovgo.Context
 	stack            []*Bytecode
-	macros           map[uint16]*Macro
+	macros           map[MacroNumber]*Macro
 	wipMacro         *Macro
-	wipMacroNumber   uint16
-	nodes            map[uint16]*Node
+	wipMacroNumber   MacroNumber
+	nodes            map[NodeNumber]*Node
+	anchors          map[AnchorNumber]*Anchor
 	root             *Node
 }
 
@@ -230,18 +196,18 @@ func NewClient(nvgCtx *nanovgo.Context) *Client {
 		Bytecode: NewBytecode(),
 		nvgCtx:   nvgCtx,
 		stack:    []*Bytecode{},
-		macros:   map[uint16]*Macro{},
-		nodes:    map[uint16]*Node{},
+		macros:   map[MacroNumber]*Macro{},
+		nodes:    map[NodeNumber]*Node{},
 		root:     NewNode(),
 	}
 	client.updateOperations = [256]func(){
-		client.macroDefStart, client.macroDefEnd, client.macroDefOperation, client.macroDefVar8, client.macroDefVar16,
-		client.macroDefUseVar8, client.macroDefUseVar16, client.macroDefUseConst8, client.macroDefUseConst16,
+		client.macroDefStart, client.macroDefEnd, client.macroDefOperation, client.macroDefVar,
+		client.macroDefUseVar, client.macroDefUseConst,
 
 		client.nodeCreate, client.nodeSetContent, client.nodeSetParent, client.nodeSetPosition, client.nodeSetRotation, client.nodeSetScale,
 	}
 	client.renderOperations = [256]func(*Node){
-		client.beginPath, client.setFillColor, client.fill, client.rectangle,
+		client.beginPath, client.setFillColor, client.fill, client.moveTo, client.lineTo, client.closePath,
 		client.macroCall,
 	}
 	return &client
@@ -330,7 +296,7 @@ func (c *Client) popState() bool {
 }
 
 func (c *Client) popAndCompileMacro() *Bytecode {
-	macroNumber := c.popUint16()
+	macroNumber := c.popMacroNumber()
 	macro, ok := c.macros[macroNumber]
 	if !ok {
 		c.error("popAndCompileMacro: invalid macroNumber: " + fmt.Sprint(macroNumber))
@@ -344,7 +310,7 @@ func (c *Client) popAndCompileMacro() *Bytecode {
 }
 
 func (c *Client) popNode() *Node {
-	nodeNumber := c.popUint16()
+	nodeNumber := c.popNodeNumber()
 	node, ok := c.nodes[nodeNumber]
 	if !ok {
 		c.error("popNode: invalid nodeNumber")
@@ -365,11 +331,11 @@ func (c *Client) macroDefStart() {
 	if c.wipMacro != nil {
 		c.error("macroDefStart: wip function already in progress")
 	}
-	functionNumber := c.popUint16()
+	macroNumber := c.popMacroNumber()
 	newWipMacro := NewMacro()
 	c.wipMacro = newWipMacro
-	c.wipMacroNumber = functionNumber
-	debugPrint("funDefStart functionNumber: ", functionNumber)
+	c.wipMacroNumber = macroNumber
+	debugPrint("funDefStart functionNumber: ", macroNumber)
 }
 
 func (c *Client) macroDefEnd() {
@@ -388,27 +354,19 @@ func (c *Client) macroDefOperation() {
 	c.wipMacro.bytecode.pushUint8(opcode)
 }
 
-func (c *Client) macroDefVar8() {
+func (c *Client) macroDefVar() {
 	if c.wipMacro == nil {
-		c.error("macroDefVar8: nil wip function")
+		c.error("macroDefVar: nil wip function")
 	}
-	c.wipMacro.variableSizes = append(c.wipMacro.variableSizes, 1)
+	variableSize := int(c.popUint8())
+	c.wipMacro.variableSizes = append(c.wipMacro.variableSizes, variableSize)
 	c.wipMacro.variableStartIndexes = append(c.wipMacro.variableStartIndexes, c.wipMacro.totalVariablesSize)
-	c.wipMacro.totalVariablesSize += 1
+	c.wipMacro.totalVariablesSize += variableSize
 }
 
-func (c *Client) macroDefVar16() {
+func (c *Client) macroDefUseVar() {
 	if c.wipMacro == nil {
-		c.error("macroDefVar16: nil wip function")
-	}
-	c.wipMacro.variableSizes = append(c.wipMacro.variableSizes, 2)
-	c.wipMacro.variableStartIndexes = append(c.wipMacro.variableStartIndexes, c.wipMacro.totalVariablesSize)
-	c.wipMacro.totalVariablesSize += 2
-}
-
-func (c *Client) macroDefUseVar8() {
-	if c.wipMacro == nil {
-		c.error("macroDefUseVar8: nil wip function")
+		c.error("macroDefUseVar: nil wip function")
 	}
 	variableNumber := c.popUint16()
 	variableReference := FunctionVariableReference{
@@ -417,41 +375,26 @@ func (c *Client) macroDefUseVar8() {
 		bytecodeIndex:      len(c.wipMacro.bytecode.bytes),
 	}
 	c.wipMacro.variableReferences = append(c.wipMacro.variableReferences, variableReference)
-	c.wipMacro.bytecode.pushUint8(0)
+	for i := 0; i < c.wipMacro.variableSizes[variableNumber]; i++ {
+		c.wipMacro.bytecode.pushUint8(0)
+	}
 }
 
-func (c *Client) macroDefUseVar16() {
+func (c *Client) macroDefUseConst() {
 	if c.wipMacro == nil {
-		c.error("macroDefUseVar16: nil wip function")
+		c.error("macroDefUseConst: nil wip function")
 	}
-	variableNumber := c.popUint16()
-	variableReference := FunctionVariableReference{
-		variableStartIndex: c.wipMacro.variableStartIndexes[variableNumber],
-		variableNumber:     variableNumber,
-		bytecodeIndex:      len(c.wipMacro.bytecode.bytes),
+	constSize := int(c.popUint8())
+	fmt.Println("macroDefUseConst: constSize: ", constSize)
+	for i := 0; i < constSize; i++ {
+		constByte := c.popUint8()
+		fmt.Println("constByte: ", constByte)
+		c.wipMacro.bytecode.pushUint8(constByte)
 	}
-	c.wipMacro.variableReferences = append(c.wipMacro.variableReferences, variableReference)
-	c.wipMacro.bytecode.pushUint16(0)
-}
-
-func (c *Client) macroDefUseConst8() {
-	if c.wipMacro == nil {
-		c.error("macroDefUseConst8: nil wip function")
-	}
-	const8 := c.popUint8()
-	c.wipMacro.bytecode.pushUint8(const8)
-}
-
-func (c *Client) macroDefUseConst16() {
-	if c.wipMacro == nil {
-		c.error("macroDefUseConst16: nil wip function")
-	}
-	const16 := c.popUint16()
-	c.wipMacro.bytecode.pushUint16(const16)
 }
 
 func (c *Client) nodeCreate() {
-	nodeNumber := c.popUint16()
+	nodeNumber := c.popNodeNumber()
 	newNode := NewNode()
 	if _, ok := c.nodes[nodeNumber]; ok {
 		c.error("nodeCreate: a node with nodeNumber already exists")
@@ -474,7 +417,7 @@ func (c *Client) nodeSetParent() {
 	if node == nil {
 		return
 	}
-	parentNodeNumber := c.popUint16()
+	parentNodeNumber := c.popNodeNumber()
 	parentNode, ok := c.nodes[parentNodeNumber]
 	if !ok {
 		c.error("nodeSetParent: invalid parentNodeNumber")
@@ -509,6 +452,19 @@ func (c *Client) nodeSetScale() {
 	node.scale = scale
 }
 
+func (c *Client) anchorCreate() {
+	anchorNumber := c.popAnchorNumber()
+	if _, ok := c.anchors[anchorNumber]; ok {
+		c.error("nodeCreate: a node with nodeNumber already exists")
+	}
+	node := c.popNode()
+	position := c.popVec2()
+	c.anchors[anchorNumber] = &Anchor{
+		node:     node,
+		position: position,
+	}
+}
+
 // ------------------------- RENDER OPERATIONS --------------------------------
 // ------------------------- RENDER OPERATIONS --------------------------------
 // ------------------------- RENDER OPERATIONS --------------------------------
@@ -518,31 +474,61 @@ func (c *Client) nodeSetScale() {
 // ------------------------- RENDER OPERATIONS --------------------------------
 // ------------------------- RENDER OPERATIONS --------------------------------
 
-func (c *Client) beginPath(node *Node) {
+func (c *Client) beginPath(n *Node) {
+	fmt.Println("beginPath")
+	// c.nvgCtx.BeginPath()
+	// c.nvgCtx.MoveTo(176.02533164390738, 179.57979919208287)
+	// c.nvgCtx.LineTo(185, 180)
+	// c.nvgCtx.LineTo(185, 190)
+	// c.nvgCtx.LineTo(176, 190)
+	// c.nvgCtx.ClosePath()
+	// c.nvgCtx.SetFillColor(nanovgo.RGB(255, 255, 255))
+	// c.nvgCtx.Fill()
 	c.nvgCtx.BeginPath()
 }
 
-func (c *Client) setFillColor(node *Node) {
+func (c *Client) setFillColor(n *Node) {
 	color := c.popRgba()
+	fmt.Println("color: ", color)
 	c.nvgCtx.SetFillColor(color)
 }
 
-func (c *Client) fill(node *Node) {
+func (c *Client) fill(n *Node) {
+	fmt.Println(("fill"))
 	c.nvgCtx.Fill()
 }
 
-func (c *Client) rectangle(node *Node) {
-	rect := c.popRect()
-	corners := rect.GetCorners()
-	globalCorners := node.TransformPoints(corners[:])
-	c.nvgCtx.MoveTo(float32(globalCorners[0].X), float32(globalCorners[0].Y))
-	c.nvgCtx.LineTo(float32(globalCorners[1].X), float32(globalCorners[1].Y))
-	c.nvgCtx.LineTo(float32(globalCorners[2].X), float32(globalCorners[2].Y))
-	c.nvgCtx.LineTo(float32(globalCorners[3].X), float32(globalCorners[3].Y))
+func (c *Client) moveTo(n *Node) {
+	vec2 := c.popVec2()
+	point := n.TransformPoint(vec2)
+	fmt.Println("moveTo: vec2: ", vec2, " point: ", point)
+	c.nvgCtx.MoveTo(float32(point.X), float32(point.Y))
+}
+
+func (c *Client) lineTo(n *Node) {
+	vec2 := c.popVec2()
+	point := n.TransformPoint(vec2)
+	fmt.Println("lineTo: vec2: ", vec2, " point: ", point)
+	c.nvgCtx.LineTo(float32(point.X), float32(point.Y))
+}
+
+func (c *Client) closePath(n *Node) {
+	fmt.Println("closePath")
 	c.nvgCtx.ClosePath()
 }
 
-func (c *Client) macroCall(node *Node) {
+// func (c *Client) rectangle(n *Node) {
+// 	rect := c.popRect()
+// 	corners := rect.GetCorners()
+// 	globalCorners := n.TransformPoints(corners[:])
+// 	c.nvgCtx.MoveTo(float32(globalCorners[0].X), float32(globalCorners[0].Y))
+// 	c.nvgCtx.LineTo(float32(globalCorners[1].X), float32(globalCorners[1].Y))
+// 	c.nvgCtx.LineTo(float32(globalCorners[2].X), float32(globalCorners[2].Y))
+// 	c.nvgCtx.LineTo(float32(globalCorners[3].X), float32(globalCorners[3].Y))
+// 	c.nvgCtx.ClosePath()
+// }
+
+func (c *Client) macroCall(n *Node) {
 	macroBytecode := c.popAndCompileMacro()
 	c.pushState(macroBytecode)
 }

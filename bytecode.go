@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"math"
 
@@ -8,15 +9,37 @@ import (
 )
 
 const uintScaleFactor = 100
+const fixpointMultiplier = 2 << 15
+
+// build in anchors
+const (
+	anchorContextTopLeft = iota
+	anchorContextTopRight
+	anchorContextBottomLeft
+	anchorContextBottomRight
+	anchorContextCenter
+
+	anchorFrameTopLeft
+	anchorFrameTopRight
+	anchorFrameBottomLeft
+	anchorFrameBottomRight
+	anchorFrameCenter
+
+	anchorMouse
+)
 
 // render operations
 const (
 	ropBeginPath = iota
 	ropSetFillColor
 	ropFill
-	ropRectangle
+	ropMoveTo
+	ropLineTo
+	ropClosePath
 
 	ropMacroCall
+
+	ropUseAnchor
 
 	ropCodeCount
 )
@@ -26,12 +49,9 @@ const (
 	uopMacroStart = iota
 	uopMacroEnd
 	uopMacroOperation
-	uopMacroVar8
-	uopMacroVar16
-	uopMacroUseVar8
-	uopMacroUseVar16
-	uopMacroUseConst8
-	uopMacroUseConst16
+	uopMacroVar
+	uopMacroUseVar
+	uopMacroUseConst
 
 	uopNodeCreate
 	uopNodeSetContent
@@ -39,7 +59,8 @@ const (
 	uopNodeSetPosition
 	uopNodeSetRotation
 	uopNodeSetScale
-	// opNodeSetPseudoParent
+
+	uopAnchorCreate
 
 	// opCreatePseudoNode
 
@@ -49,15 +70,19 @@ const (
 )
 
 var updateOpcodeNames = [254]string{
-	"uopFunDefStart", "uopFunDefEnd", "uopFunDefOperation", "uopFunDefVar8", "uopFunDefVar16",
-	"uopFunDefUseVar8", "uopFunDefUseVar16", "uopFunDefUseConst8", "uopFunDefUseConst16",
+	"uopMacroDefStart", "uopMacroDefEnd", "uopMacroDefOperation", "uopMacroDefVar",
+	"uopMacroDefUseVar", "uopMacroDefUseConst",
 
 	"uopNodeCreate", "uopNodeSetContent", "uopNodeSetParent", "uopNodeSetPosition", "uopNodeSetRotation", "uopNodeSetScale",
 }
 
 var renderOpcodeName = [256]string{
-	"ropBeginPath", "ropSetFillColor", "ropFill", "ropRectangle", "uopFunCall",
+	"ropBeginPath", "ropSetFillColor", "ropFill", "ropMoveTo", "ropLineTo", "ropClosePath", "ropMacroCall",
 }
+
+type AnchorNumber uint16
+type NodeNumber uint16
+type MacroNumber uint16
 
 type Bytecode struct {
 	bytes      []byte
@@ -99,8 +124,8 @@ func (b *Bytecode) popUint8() uint8 {
 }
 
 func (s *Bytecode) pushUint16(value uint16) {
-	high := byte(value >> 8)
-	low := byte(value)
+	high := uint8(value >> 8)
+	low := uint8(value)
 	s.bytes = append(s.bytes, low, high)
 }
 
@@ -110,9 +135,85 @@ func (b *Bytecode) popUint16() uint16 {
 	}
 	low := b.bytes[b.i]
 	high := b.bytes[b.i+1]
-	value := (uint16(high) << 8) + uint16(low)
 	b.i += 2
-	return value
+	return (uint16(high) << 8) + uint16(low)
+}
+
+func (b *Bytecode) pushNodeNumber(number NodeNumber) {
+	b.pushUint16(uint16(number))
+}
+
+func (b *Bytecode) popNodeNumber() NodeNumber {
+	return NodeNumber(b.popUint16())
+}
+
+func (b *Bytecode) pushMacroNumber(number MacroNumber) {
+	b.pushUint16(uint16(number))
+}
+
+func (b *Bytecode) popMacroNumber() MacroNumber {
+	return MacroNumber(b.popUint16())
+}
+
+func (b *Bytecode) pushAnchorNumber(number AnchorNumber) {
+	b.pushUint16(uint16(number))
+}
+
+func (b *Bytecode) popAnchorNumber() AnchorNumber {
+	return AnchorNumber(b.popUint16())
+}
+
+func (b *Bytecode) pushUint32(value uint32) {
+	b1 := uint8(value >> 24) // highest, most significant
+	b2 := uint8(value >> 16)
+	b3 := uint8(value >> 8)
+	b4 := uint8(value) // lowest, least significant
+	b.bytes = append(b.bytes, b4, b3, b2, b1)
+}
+
+func (b *Bytecode) popUint32() uint32 {
+	if (b.i + 3) >= len(b.bytes) {
+		b.error("popUint32 out of range")
+	}
+	b1 := b.bytes[b.i+3]
+	b2 := b.bytes[b.i+2]
+	b3 := b.bytes[b.i+1]
+	b4 := b.bytes[b.i]
+	b.i += 4
+	return (uint32(b1) << 24) + (uint32(b2) << 16) + (uint32(b3) << 8) + uint32(b4)
+}
+
+func (b *Bytecode) pushInt32(value int32) {
+	b1 := uint8(value >> 24) // highest, most significant
+	b2 := uint8(value >> 16)
+	b3 := uint8(value >> 8)
+	b4 := uint8(value) // lowest, least significant
+	b.bytes = append(b.bytes, b4, b3, b2, b1)
+}
+
+func (b *Bytecode) popInt32() int32 {
+	if (b.i + 3) >= len(b.bytes) {
+		b.error("popUint32 out of range")
+	}
+	b1 := b.bytes[b.i+3]
+	b2 := b.bytes[b.i+2]
+	b3 := b.bytes[b.i+1]
+	b4 := b.bytes[b.i]
+	b.i += 4
+	fmt.Println("popInt32: b1: ", b1, " b2: ", b2, " b3: ", b3, " b4: ", b4)
+	return (int32(b1) << 24) + (int32(b2) << 16) + (int32(b3) << 8) + int32(b4)
+}
+
+func (b *Bytecode) pushFloat64(value float64) {
+	b.pushInt32(int32(value * fixpointMultiplier))
+}
+
+func (b *Bytecode) popFloat64() float64 {
+	return float64(b.popInt32()) / fixpointMultiplier
+}
+
+func (b *Bytecode) pushOpcode(opcode uint8) {
+	b.pushUint8(opcode)
 }
 
 func (b *Bytecode) popOpcode() uint8 {
@@ -121,28 +222,33 @@ func (b *Bytecode) popOpcode() uint8 {
 	return opcode
 }
 
+func (b *Bytecode) pushSize(size int) {
+	if size > math.MaxUint8 {
+		b.error("pushSize: size uint8 overflow")
+	}
+	b.pushUint8(uint8(size))
+}
+
 func (b *Bytecode) pushVec2(point Vec2) {
-	b.pushUint16(uint16(point.X))
-	b.pushUint16(uint16(point.Y))
+	b.pushFloat64(point.X)
+	b.pushFloat64(point.Y)
 }
 
 func (b *Bytecode) popVec2() Vec2 {
-	return Vec2{X: float64(b.popUint16()), Y: float64(b.popUint16())}
+	return Vec2{X: b.popFloat64(), Y: b.popFloat64()}
 }
 
-func (b *Bytecode) pushRect(value FixpointRect) {
-	b.pushUint16(value.X)
-	b.pushUint16(value.Y)
-	b.pushUint16(value.W)
-	b.pushUint16(value.H)
-}
+// func (b *Bytecode) pushRect(value FixpointRect) {
+// 	b.pushUint16(value.X)
+// 	b.pushUint16(value.Y)
+// 	b.pushUint16(value.W)
+// 	b.pushUint16(value.H)
+// }
 
 func (b *Bytecode) popRect() Rect {
-	x := b.popUint16()
-	y := b.popUint16()
-	w := b.popUint16()
-	h := b.popUint16()
-	return Rect{position: Vec2{X: float64(x), Y: float64(y)}, W: float64(w), H: float64(h)}
+	position := b.popVec2()
+	size := b.popVec2()
+	return Rect{position, size}
 }
 
 func (b *Bytecode) pushRgba(value nanovgo.Color) {
